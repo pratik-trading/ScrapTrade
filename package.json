@@ -1,0 +1,13 @@
+{
+  "name": "scrap-trade",
+  "version": "1.0.0",
+  "description": "A production-ready scrap trading business management system for tracking incoming/outgoing bills and payments, organized by Indian Financial Year.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
