@@ -9,15 +9,24 @@ export const AuthProvider = ({ children }) => {
   const hasFetched = useRef(false);
 
   useEffect(() => {
-    // Only run once on mount, never again
     if (hasFetched.current) return;
     hasFetched.current = true;
 
+    // Only try getMe if we have a token stored
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
     authAPI.getMe()
       .then(res => setUser(res.data.user))
-      .catch(() => setUser(null))  // silently set null, no redirect
+      .catch(() => {
+        setUser(null);
+        localStorage.removeItem('auth_token'); // clear bad token
+      })
       .finally(() => setLoading(false));
-  }, []); // empty array - runs once only
+  }, []);
 
   const login = async (email, password) => {
     const res = await authAPI.login({ email, password });
@@ -34,6 +43,7 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     await authAPI.logout();
     setUser(null);
+    localStorage.removeItem('auth_token');
   };
 
   return (

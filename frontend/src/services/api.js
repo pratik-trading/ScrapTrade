@@ -6,20 +6,33 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Flag to prevent redirect loop during initial load
+// Attach token from localStorage if cookie not available (cross-origin)
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('auth_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 let isRedirecting = false;
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    // If login/register response has token, save it
+    if (res.data?.token) {
+      localStorage.setItem('auth_token', res.data.token);
+    }
+    return res;
+  },
   (err) => {
-    // Only redirect on 401 if it's NOT the /auth/me check
-    // and only if we're not already redirecting
     const url = err.config?.url || '';
     const is401 = err.response?.status === 401;
     const isAuthMe = url.includes('/auth/me');
 
     if (is401 && !isAuthMe && !isRedirecting) {
       isRedirecting = true;
+      localStorage.removeItem('auth_token');
       window.location.href = '/login';
       setTimeout(() => { isRedirecting = false; }, 3000);
     }
@@ -32,7 +45,10 @@ api.interceptors.response.use(
 export const authAPI = {
   register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
-  logout: () => api.post('/auth/logout'),
+  logout: () => {
+    localStorage.removeItem('auth_token');
+    return api.post('/auth/logout');
+  },
   getMe: () => api.get('/auth/me'),
 };
 
@@ -75,12 +91,16 @@ export const dashboardAPI = {
 // Reports
 export const reportAPI = {
   exportPurchases: (params) => {
-    const queryString = new URLSearchParams(params).toString();
-    window.open(`${import.meta.env.VITE_API_URL || '/api'}/reports/purchases/export?${queryString}`, '_blank');
+    const token = localStorage.getItem('auth_token');
+    const base = import.meta.env.VITE_API_URL || '/api';
+    const qs = new URLSearchParams({ ...params, token }).toString();
+    window.open(`${base}/reports/purchases/export?${qs}`, '_blank');
   },
   exportSales: (params) => {
-    const queryString = new URLSearchParams(params).toString();
-    window.open(`${import.meta.env.VITE_API_URL || '/api'}/reports/sales/export?${queryString}`, '_blank');
+    const token = localStorage.getItem('auth_token');
+    const base = import.meta.env.VITE_API_URL || '/api';
+    const qs = new URLSearchParams({ ...params, token }).toString();
+    window.open(`${base}/reports/sales/export?${qs}`, '_blank');
   },
 };
 
