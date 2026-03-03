@@ -1,31 +1,38 @@
 const mongoose = require('mongoose');
 const paymentSchema = require('./Payment');
 
+const lineItemSchema = new mongoose.Schema({
+  srNo:         { type: Number },
+  materialType: { type: String, required: true },
+  weight:       { type: Number, required: true },
+  weightUnit:   { type: String, default: 'kg' },
+  ratePerKg:    { type: Number, required: true },
+  totalAmount:  { type: Number, required: true },
+}, { _id: false });
+
 const purchaseSchema = new mongoose.Schema({
   billNumber: { type: String, required: true, trim: true },
-  party: { type: mongoose.Schema.Types.ObjectId, ref: 'Party', required: true },
+  party:      { type: mongoose.Schema.Types.ObjectId, ref: 'Party', required: true },
+
+  // Primary fields — kept for backward compat and simple queries
   materialType: { type: String, required: true, trim: true },
-  weight: { type: Number, required: true, min: 0 },
-  weightUnit: { type: String, enum: ['kg', 'ton', 'quintal'], default: 'kg' },
-  ratePerKg: { type: Number, required: true, min: 0 },
+  weight:       { type: Number, required: true, min: 0 },
+  weightUnit:   { type: String, enum: ['kg', 'ton', 'quintal'], default: 'kg' },
+  ratePerKg:    { type: Number, required: true, min: 0 },
+  totalAmount:  { type: Number, required: true, min: 0 },
 
-  // GST Fields
-  taxableAmount: { type: Number, required: true, min: 0 }, // weight * rate (before GST)
-  gstType: { type: String, enum: ['none', 'IGST', 'CGST_SGST'], default: 'none' },
-  gstPercent: { type: Number, default: 0 },   // e.g. 18 for 18%
-  cgstAmount: { type: Number, default: 0 },
-  sgstAmount: { type: Number, default: 0 },
-  igstAmount: { type: Number, default: 0 },
-  totalGstAmount: { type: Number, default: 0 },
-  totalAmount: { type: Number, required: true, min: 0 }, // taxableAmount + totalGstAmount
+  // All line items (for multi-product bills)
+  lineItems: { type: [lineItemSchema], default: [] },
 
-  billDate: { type: Date, required: true },
-  dueDate: { type: Date },
-  financialYear: { type: String, required: true },
-  pdfUrl: { type: String, default: '' },
-  pdfPublicId: { type: String, default: '' },
-  payments: [paymentSchema],
-  notes: { type: String, default: '' },
+  billDate:     { type: Date, required: true },
+  dueDate:      { type: Date },
+  financialYear:{ type: String, required: true },
+
+  pdfUrl:       { type: String, default: '' },
+  pdfPublicId:  { type: String, default: '' },
+
+  payments:  [paymentSchema],
+  notes:     { type: String, default: '' },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 }, { timestamps: true });
 
