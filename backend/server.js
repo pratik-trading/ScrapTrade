@@ -12,6 +12,7 @@ const salesRoutes = require('./routes/sales');
 const dashboardRoutes = require('./routes/dashboard');
 const reportRoutes = require('./routes/reports');
 const lotRoutes = require('./routes/lots');
+const integrationRoutes = require('./routes/integrations');
 
 const errorHandler = require('./middleware/errorHandler');
 
@@ -24,6 +25,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:4173',
   process.env.CLIENT_URL,
+  process.env.INVOICE_APP_URL,   // deployed invoice generator, e.g. https://my-invoice.vercel.app
 ].filter(Boolean);
 
 app.use(cors({
@@ -34,7 +36,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
 }));
 
 app.use(express.json());
@@ -48,6 +50,7 @@ app.use('/api/sales', salesRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/lots', lotRoutes);
+app.use('/api/integrations', integrationRoutes);   // invoice generator → ScrapTrade (API-key protected)
 
 app.get('/api/health', (req, res) => res.json({ status: 'OK', timestamp: new Date() }));
 

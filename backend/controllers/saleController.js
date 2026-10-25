@@ -17,7 +17,7 @@ const calcGST = (taxable, gstType, gstPercent) => {
 };
 
 exports.getSales = async (req, res) => {
-  const { financialYear, party, status, search, startDate, endDate, page = 1, limit = 50 } = req.query;
+  const { financialYear, party, status, search, startDate, endDate } = req.query;
   const query = { createdBy: req.user._id };
   if (financialYear) query.financialYear = financialYear;
   if (party) query.party = party;
@@ -25,21 +25,22 @@ exports.getSales = async (req, res) => {
   if (startDate || endDate) {
     query.billDate = {};
     if (startDate) query.billDate.$gte = new Date(startDate);
-    if (endDate) query.billDate.$lte = new Date(endDate);
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      query.billDate.$lte = end;
+    }
   }
-  const skip = (parseInt(page) - 1) * parseInt(limit);
-  const [sales, total] = await Promise.all([
-    Sale.find(query).populate('party', 'name mobile').sort({ billDate: -1 }).skip(skip).limit(parseInt(limit)),
-    Sale.countDocuments(query),
-  ]);
-  let filtered = sales;
+
+  let sales = await Sale.find(query)
+    .populate('party', 'name mobile')
+    .sort({ billDate: -1, createdAt: -1 });
+
   if (status) {
-    filtered = sales.filter(s => {
-      const st = s.isOverdue ? 'Overdue' : s.paymentStatus;
-      return st === status;
-    });
+    sales = sales.filter(s => (s.isOverdue ? 'Overdue' : s.paymentStatus) === status);
   }
-  res.json({ success: true, sales: filtered, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
+
+  res.json({ success: true, sales, total: sales.length });
 };
 
 exports.getSale = async (req, res) => {

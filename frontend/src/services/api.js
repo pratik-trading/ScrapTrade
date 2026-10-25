@@ -102,6 +102,7 @@ export const reportAPI = {
     const qs = new URLSearchParams({ ...params, token }).toString();
     window.open(`${base}/reports/sales/export?${qs}`, '_blank');
   },
+  partyTrades: (params) => api.get('/reports/party-trades', { params }),
 };
 
 export default api;

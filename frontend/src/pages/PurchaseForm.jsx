@@ -11,24 +11,23 @@ const MATERIALS = ['Iron Scrap', 'Steel Scrap', 'Copper', 'Brass', 'Aluminium',
 const EMPTY_ITEM = { materialType: '', weight: '', weightUnit: 'kg', ratePerKg: '', taxableAmount: '' };
 
 // mirrors backend calcTotals
-const calcTotals = ({ taxableAmount, gstType, gstPercent, tcsApplicable, tcsPercent, otherCharges }) => {
+const calcTotals = ({ taxableAmount, gstType, gstPercent, tcsApplicable, tcsAmount, otherCharges }) => {
   const taxable = parseFloat(taxableAmount) || 0;
-  const gstPct  = parseFloat(gstPercent) || 0;
-  const tcsPct  = parseFloat(tcsPercent) || 0;
-  const others  = parseFloat(otherCharges) || 0;
+  const gstPct = parseFloat(gstPercent) || 0;
+  const others = parseFloat(otherCharges) || 0;
 
   const gstAmt = gstType === 'none' ? 0 : parseFloat(((taxable * gstPct) / 100).toFixed(2));
-  const half   = parseFloat((gstAmt / 2).toFixed(2));
-  const cgst   = gstType === 'CGST_SGST' ? half : 0;
-  const sgst   = gstType === 'CGST_SGST' ? half : 0;
-  const igst   = gstType === 'IGST'      ? gstAmt : 0;
+  const half = parseFloat((gstAmt / 2).toFixed(2));
+  const cgst = gstType === 'CGST_SGST' ? half : 0;
+  const sgst = gstType === 'CGST_SGST' ? half : 0;
+  const igst = gstType === 'IGST' ? gstAmt : 0;
 
-  // TCS base = taxableAmount only (CBDT Circular 17/2020 — excludes GST)
-  const tcsAmt   = tcsApplicable ? parseFloat(((taxable * tcsPct) / 100).toFixed(2)) : 0;
+  // TCS is now entered manually (not derived from a %)
+  const tcsAmt = tcsApplicable ? (parseFloat(tcsAmount) || 0) : 0;
 
   // Final: taxable + GST + TCS + otherCharges
   const preRound = taxable + gstAmt + tcsAmt + others;
-  const total    = Math.round(preRound);
+  const total = Math.round(preRound);
   const roundOff = parseFloat((total - preRound).toFixed(2));
 
   return { cgst, sgst, igst, gstAmt, tcsAmt, roundOff, total };
@@ -41,8 +40,9 @@ export default function PurchaseForm() {
 
   const [parties, setParties] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [ocrLoading, setOcrLoading] = useState(false);
   const [pdfFile, setPdfFile] = useState(null);
-  const [items, setItems]     = useState([{ ...EMPTY_ITEM }]);
+  const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
 
   const [form, setForm] = useState({
     billNumber: '',
@@ -52,11 +52,97 @@ export default function PurchaseForm() {
     gstType: 'CGST_SGST',
     gstPercent: 18,
     tcsApplicable: false,
-    tcsPercent: 1,
+    tcsAmount: '',
     otherCharges: '',
     otherChargesLabel: 'Freight / Other Charges',
     notes: '',
   });
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+
+    if (!file) return;
+
+    setPdfFile(file);
+    setOcrLoading(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("http://localhost:8000/extract", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("OCR failed");
+      }
+
+      const result = await response.json();
+
+      console.log(result);
+
+      // Depending on your API response
+      const invoice = result.data || result;
+
+      // Find matching party
+      const matchedParty = parties.find(
+        (p) =>
+          p.name.trim().toLowerCase() ===
+          (invoice.seller || "").trim().toLowerCase()
+      );
+
+      // Fill form
+      setForm((prev) => ({
+        ...prev,
+        billNumber: invoice.billNumber || prev.billNumber,
+        billDate: invoice.billDate || prev.billDate,
+        party: matchedParty ? matchedParty._id : prev.party,
+
+        // TCS
+        tcsApplicable:
+          invoice.tcsApplicable !== undefined
+            ? invoice.tcsApplicable
+            : prev.tcsApplicable,
+        tcsAmount:
+          invoice.tcsApplicable && invoice.tcsAmount !== undefined
+            ? invoice.tcsAmount
+            : prev.tcsAmount,
+      }));
+
+      // Fill line items
+      if (invoice.lineItems?.length) {
+        const extractedItems = invoice.lineItems.map((item) => {
+          const weight = parseFloat(item.weight) || 0;
+          const rate = parseFloat(item.ratePerKg) || 0;
+
+          return {
+            materialType: item.materialType || "",
+            weight,
+            weightUnit: item.weightUnit || "kg",
+            ratePerKg: rate,
+            taxableAmount: +(weight * rate).toFixed(2),
+          };
+        });
+
+        setItems(extractedItems);
+      }
+
+      toast.success("Bill details extracted successfully");
+
+    } catch (err) {
+      console.error(err);
+      toast.error("Unable to extract bill details.");
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    console.log(pdfFile)
+  }, [pdfFile])
+
 
   useEffect(() => {
     partyAPI.getAll().then(res => setParties(res.data.parties));
@@ -64,32 +150,32 @@ export default function PurchaseForm() {
       purchaseAPI.getOne(id).then(res => {
         const p = res.data.purchase;
         setForm({
-          billNumber:        p.billNumber,
-          party:             p.party._id,
-          billDate:          p.billDate?.split('T')[0]  || '',
-          dueDate:           p.dueDate?.split('T')[0]   || '',
-          gstType:           p.gstType           || 'CGST_SGST',
-          gstPercent:        p.gstPercent         || 18,
-          tcsApplicable:     p.tcsApplicable      || false,
-          tcsPercent:        p.tcsPercent         || 1,
-          otherCharges:      p.otherCharges       || '',
-          otherChargesLabel: p.otherChargesLabel  || 'Freight / Other Charges',
-          notes:             p.notes              || '',
+          billNumber: p.billNumber,
+          party: p.party._id,
+          billDate: p.billDate?.split('T')[0] || '',
+          dueDate: p.dueDate?.split('T')[0] || '',
+          gstType: p.gstType || 'CGST_SGST',
+          gstPercent: p.gstPercent || 18,
+          tcsApplicable: p.tcsApplicable || false,
+          tcsAmount: p.tcsAmount || '',
+          otherCharges: p.otherCharges || '',
+          otherChargesLabel: p.otherChargesLabel || 'Freight / Other Charges',
+          notes: p.notes || '',
         });
         if (p.lineItems?.length > 0) {
           setItems(p.lineItems.map(i => ({
-            materialType:  i.materialType,
-            weight:        i.weight,
-            weightUnit:    i.weightUnit || 'kg',
-            ratePerKg:     i.ratePerKg,
+            materialType: i.materialType,
+            weight: i.weight,
+            weightUnit: i.weightUnit || 'kg',
+            ratePerKg: i.ratePerKg,
             taxableAmount: i.taxableAmount,
           })));
         } else {
           setItems([{
-            materialType:  p.materialType,
-            weight:        p.weight,
-            weightUnit:    p.weightUnit || 'kg',
-            ratePerKg:     p.ratePerKg,
+            materialType: p.materialType,
+            weight: p.weight,
+            weightUnit: p.weightUnit || 'kg',
+            ratePerKg: p.ratePerKg,
             taxableAmount: p.taxableAmount || p.totalAmount,
           }]);
         }
@@ -103,7 +189,7 @@ export default function PurchaseForm() {
       const updated = [...prev];
       updated[index] = { ...updated[index], [name]: value };
       if (name === 'weight' || name === 'ratePerKg') {
-        const w = parseFloat(name === 'weight'    ? value : updated[index].weight)    || 0;
+        const w = parseFloat(name === 'weight' ? value : updated[index].weight) || 0;
         const r = parseFloat(name === 'ratePerKg' ? value : updated[index].ratePerKg) || 0;
         updated[index].taxableAmount = parseFloat((w * r).toFixed(2));
       }
@@ -111,7 +197,7 @@ export default function PurchaseForm() {
     });
   };
 
-  const addItem    = () => setItems(prev => [...prev, { ...EMPTY_ITEM }]);
+  const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM }]);
   const removeItem = (i) => { if (items.length > 1) setItems(prev => prev.filter((_, idx) => idx !== i)); };
 
   const handleFormChange = (e) => {
@@ -122,11 +208,11 @@ export default function PurchaseForm() {
   const totalTaxable = items.reduce((sum, i) => sum + (parseFloat(i.taxableAmount) || 0), 0);
   const calc = calcTotals({
     taxableAmount: totalTaxable,
-    gstType:       form.gstType,
-    gstPercent:    form.gstPercent,
+    gstType: form.gstType,
+    gstPercent: form.gstPercent,
     tcsApplicable: form.tcsApplicable,
-    tcsPercent:    form.tcsPercent,
-    otherCharges:  form.otherCharges,
+    tcsAmount: form.tcsAmount,
+    otherCharges: form.otherCharges,
   });
 
   const handleSubmit = async (e) => {
@@ -141,18 +227,18 @@ export default function PurchaseForm() {
     try {
       const payload = {
         ...form,
-        materialType:  items.map(i => i.materialType).join(', '),
-        weight:        items.reduce((s, i) => s + (parseFloat(i.weight) || 0), 0),
-        weightUnit:    items[0].weightUnit,
-        ratePerKg:     items[0].ratePerKg,
+        materialType: items.map(i => i.materialType).join(', '),
+        weight: items.reduce((s, i) => s + (parseFloat(i.weight) || 0), 0),
+        weightUnit: items[0].weightUnit,
+        ratePerKg: items[0].ratePerKg,
         taxableAmount: totalTaxable,
         lineItems: JSON.stringify(
           items.map((item, idx) => ({
-            srNo:          idx + 1,
-            materialType:  item.materialType,
-            weight:        parseFloat(item.weight) || 0,
-            weightUnit:    item.weightUnit,
-            ratePerKg:     parseFloat(item.ratePerKg) || 0,
+            srNo: idx + 1,
+            materialType: item.materialType,
+            weight: parseFloat(item.weight) || 0,
+            weightUnit: item.weightUnit,
+            ratePerKg: parseFloat(item.ratePerKg) || 0,
             taxableAmount: parseFloat(item.taxableAmount) || 0,
           }))
         ),
@@ -194,6 +280,16 @@ export default function PurchaseForm() {
         {/* ── Bill Header ───────────────────────────────────────────────── */}
         <Card className="p-6 space-y-4">
           <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Bill Details</h3>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1.5">Bill PDF / Image</label>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={handleFileChange}
+              className="w-full text-sm text-gray-600 dark:text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-orange-50 file:text-orange-700 dark:file:bg-orange-500/10 dark:file:text-orange-400 hover:file:bg-orange-100 dark:hover:file:bg-orange-500/20" />
+            {ocrLoading && (
+              <p className="text-sm text-orange-500 mt-2">
+                Reading bill...
+              </p>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <Input label="Bill Number *" name="billNumber" value={form.billNumber} onChange={handleFormChange} placeholder="PUR-001" required />
             <Select label="Party *" name="party" value={form.party} onChange={handleFormChange} required>
@@ -203,7 +299,7 @@ export default function PurchaseForm() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <Input label="Bill Date *" name="billDate" type="date" value={form.billDate} onChange={handleFormChange} required />
-            <Input label="Due Date"    name="dueDate"  type="date" value={form.dueDate}  onChange={handleFormChange} />
+            <Input label="Due Date" name="dueDate" type="date" value={form.dueDate} onChange={handleFormChange} />
           </div>
         </Card>
 
@@ -328,20 +424,8 @@ export default function PurchaseForm() {
           </div>
 
           {form.tcsApplicable && (
-            <>
-              <div className="grid grid-cols-2 gap-4 items-end">
-                <Input label="TCS %" name="tcsPercent" type="number" step="0.01" min="0" max="100"
-                  value={form.tcsPercent} onChange={handleFormChange} placeholder="1" />
-                <div className="flex justify-between px-3 py-2 rounded-lg bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/20">
-                  <span className="text-xs text-orange-600 dark:text-orange-400 font-medium">TCS Amount</span>
-                  <span className="font-mono font-semibold text-orange-700 dark:text-orange-300">{formatCurrency(calc.tcsAmt)}</span>
-                </div>
-              </div>
-              <p className="text-xs text-gray-400 dark:text-gray-500">
-                Applied on taxable amount only: {formatCurrency(totalTaxable)}
-                <span className="ml-1 text-gray-300 dark:text-gray-600">(GST excluded per CBDT Circular 17/2020)</span>
-              </p>
-            </>
+            <Input label="TCS Amount (₹)" name="tcsAmount" type="number" step="0.01" min="0"
+              value={form.tcsAmount} onChange={handleFormChange} placeholder="0.00" />
           )}
         </Card>
 
@@ -365,11 +449,7 @@ export default function PurchaseForm() {
               className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800/50 text-gray-900 dark:text-white focus:outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-500/20 resize-none"
               placeholder="Optional notes..." />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1.5">Bill PDF / Image</label>
-            <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e => setPdfFile(e.target.files[0])}
-              className="w-full text-sm text-gray-600 dark:text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-orange-50 file:text-orange-700 dark:file:bg-orange-500/10 dark:file:text-orange-400 hover:file:bg-orange-100 dark:hover:file:bg-orange-500/20" />
-          </div>
+
         </Card>
 
         {/* ── Bill Summary ──────────────────────────────────────────────── */}
@@ -398,7 +478,7 @@ export default function PurchaseForm() {
             )}
             {form.tcsApplicable && (
               <div className="flex justify-between px-4 py-2 text-sm">
-                <span className="text-gray-500 dark:text-gray-400">TCS ({form.tcsPercent}%)</span>
+                <span className="text-gray-500 dark:text-gray-400">TCS</span>
                 <span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(calc.tcsAmt)}</span>
               </div>
             )}
