@@ -1,6 +1,5 @@
 const Purchase = require('../models/Purchase');
 const Sale = require('../models/Sale');
-
 const toCSV = (headers, rows) => {
   const headerLine = headers.join(',');
   const rowLines = rows.map(row => headers.map(h => {
@@ -108,6 +107,7 @@ const quarterRange = (financialYear, quarter) => {
 // Response: bills[] — one entry per invoice, each with its material lines[]
 exports.getPartyTrades = async (req, res) => {
   const { party, type = 'purchase', financialYear, quarter, startDate, endDate } = req.query;
+  const includePaymentStatus = req.query.includePaymentStatus === 'true';   // ← add this line
   if (!party) return res.status(400).json({ success: false, message: 'Party is required.' });
 
   const Model = type === 'sale' ? Sale : Purchase;
@@ -148,7 +148,7 @@ exports.getPartyTrades = async (req, res) => {
         amount: r2(num(it.taxableAmount) || weight * rate),
       };
     });
-    return {
+    const bill = {
       id: b._id,
       billDate: b.billDate,
       billNumber: b.billNumber,
@@ -158,18 +158,36 @@ exports.getPartyTrades = async (req, res) => {
       other: r2(total - taxable - gst),   // TCS / other charges / round-off
       total,
     };
+
+    if (includePaymentStatus) {
+      const paid = r2(num(b.paidAmount));
+      bill.paidAmount = paid;
+      bill.pendingAmount = r2(Math.max(total - paid, 0));
+      bill.paymentStatus = b.isOverdue ? 'Overdue' : b.paymentStatus; // Paid | Partial | Pending | Overdue
+      bill.isPaid = paid >= total;
+      bill.dueDate = b.dueDate || null;
+    }
+    return bill;
   });
 
   const sum = k => r2(bills.reduce((s, b) => s + b[k], 0));
   const weightByUnit = {};
   bills.forEach(b => b.lines.forEach(l => { weightByUnit[l.unit] = r2((weightByUnit[l.unit] || 0) + l.weight); }));
 
-  res.json({
+  const summary = { amount: sum('amount'), gst: sum('gst'), other: sum('other'), total: sum('total'), weightByUnit };
+  if (includePaymentStatus) {
+    summary.paid = sum('paidAmount');
+    summary.pending = sum('pendingAmount');
+    summary.paidBills = bills.filter(b => b.isPaid).length;
+    summary.unpaidBills = bills.filter(b => !b.isPaid).length;
+  }
+
+    res.json({
     success: true,
     type,
     party: docs[0]?.party || null,
     count: bills.length,
     bills,
-    summary: { amount: sum('amount'), gst: sum('gst'), other: sum('other'), total: sum('total'), weightByUnit },
+    summary,
   });
 };

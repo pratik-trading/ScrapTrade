@@ -20,6 +20,11 @@ const download = (blob, filename) => {
   URL.revokeObjectURL(url);
 };
 
+const GREEN = 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
+const RED = 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+const STATUS_STYLE = { Paid: GREEN, Partial: RED, Pending: RED, Overdue: RED };
+
+
 export default function PartyTradeReport() {
   const { financialYear } = useApp();
   const fyList = getFinancialYearsList(2020);
@@ -34,9 +39,11 @@ export default function PartyTradeReport() {
   const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState(null); // { data, meta }
+  const [showPayment, setShowPayment] = useState(false); // optional payment status
+
 
   useEffect(() => {
-    partyAPI.getAll().then(res => setParties(res.data.parties)).catch(() => {});
+    partyAPI.getAll().then(res => setParties(res.data.parties)).catch(() => { });
   }, []);
 
   const periodLabel = () => {
@@ -49,6 +56,7 @@ export default function PartyTradeReport() {
     if (!partyId) return toast.error('Select a party');
     if (mode === 'custom' && !startDate && !endDate) return toast.error('Pick a date range');
     const params = { party: partyId, type };
+    if (showPayment) params.includePaymentStatus = true;
     if (mode === 'custom') {
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
@@ -60,7 +68,7 @@ export default function PartyTradeReport() {
     try {
       const res = await reportAPI.partyTrades(params);
       const partyName = parties.find(p => p._id === partyId)?.name || res.data.party?.name || 'Party';
-      setReport({ data: res.data, meta: { partyName, type, period: periodLabel() } });
+      setReport({ data: res.data, meta: { partyName, type, period: periodLabel(), showPayment } });
       if (!res.data.bills.length) toast('No trades found for this selection');
     } catch {
       toast.error('Failed to generate report');
@@ -121,6 +129,16 @@ export default function PartyTradeReport() {
         )}
       </div>
 
+      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer w-fit">
+        <input
+          type="checkbox"
+          checked={showPayment}
+          onChange={e => { setShowPayment(e.target.checked); setReport(null); }}
+          className="h-4 w-4 rounded border-gray-300 text-primary-600"
+        />
+        Show payment status (paid / pending)
+      </label>
+
       <Button onClick={generate} disabled={loading}>{loading ? 'Generating…' : 'Generate Report'}</Button>
 
       {loading && <Spinner />}
@@ -144,8 +162,11 @@ export default function PartyTradeReport() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-                    {['Date', 'Invoice No', 'Material', 'Weight', 'Rate', 'Amount', 'GST', 'TCS/Other', 'Bill Total'].map((h, i) => (
-                      <th key={h} className={`py-2 px-3 ${i >= 3 ? 'text-right' : ''}`}>{h}</th>
+                    {[
+                      'Date', 'Invoice No', 'Material', 'Weight', 'Rate', 'Amount', 'GST', 'TCS/Other', 'Bill Total',
+                      ...(report.meta.showPayment ? ['Paid', 'Pending', 'Status'] : []),
+                    ].map((h, i) => (
+                      <th key={h} className={`py-2 px-3 ${i >= 3 && h !== 'Status' ? 'text-right' : ''}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -164,6 +185,17 @@ export default function PartyTradeReport() {
                         {i === 0 && <td rowSpan={n} className={`${cls} text-right font-mono`}>{inr(b.gst)}</td>}
                         {i === 0 && <td rowSpan={n} className={`${cls} text-right font-mono`}>{inr(b.other)}</td>}
                         {i === 0 && <td rowSpan={n} className={`${cls} text-right font-mono font-semibold`}>{inr(b.total)}</td>}
+                        {i === 0 && report.meta.showPayment && (
+                          <>
+                            <td rowSpan={n} className={`${cls} text-right font-mono text-green-600 dark:text-green-400`}>{inr(b.paidAmount)}</td>
+                            <td rowSpan={n} className={`${cls} text-right font-mono text-red-600 dark:text-red-400`}>{inr(b.pendingAmount)}</td>
+                            <td rowSpan={n} className={cls}>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLE[b.paymentStatus] || ''}`}>
+                                {b.paymentStatus}
+                              </span>
+                            </td>
+                          </>
+                        )}
                       </tr>
                     );
                   }))}
@@ -177,6 +209,15 @@ export default function PartyTradeReport() {
                     <td className="py-2 px-3 text-right font-mono">{inr(report.data.summary.gst)}</td>
                     <td className="py-2 px-3 text-right font-mono">{inr(report.data.summary.other)}</td>
                     <td className="py-2 px-3 text-right font-mono">{inr(report.data.summary.total)}</td>
+                    {report.meta.showPayment && (
+                      <>
+                        <td className="py-2 px-3 text-right font-mono text-green-600 dark:text-green-400">{inr(report.data.summary.paid)}</td>
+                        <td className="py-2 px-3 text-right font-mono text-red-600 dark:text-red-400">{inr(report.data.summary.pending)}</td>
+                        <td className="py-2 px-3 text-xs font-normal text-gray-500">
+                          {report.data.summary.paidBills} paid · {report.data.summary.unpaidBills} unpaid
+                        </td>
+                      </>
+                    )}
                   </tr>
                 </tfoot>
               </table>
