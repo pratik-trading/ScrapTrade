@@ -6,7 +6,9 @@ const FormData = require("form-data");
 const fs = require("fs");
 
 // Central calculator — called on create AND update
-const calcTotals = ({ taxableAmount, gstType, gstPercent, tcsApplicable, tcsPercent, otherCharges }) => {
+// If a valid tcsAmount is supplied, it is used as-is.
+// Otherwise TCS is auto-calculated as taxableAmount * tcsPercent / 100.
+const calcTotals = ({ taxableAmount, gstType, gstPercent, tcsApplicable, tcsPercent, tcsAmount, otherCharges }) => {
   const taxable = parseFloat(taxableAmount) || 0;
   const gstPct = parseFloat(gstPercent) || 0;
   const tcsPct = parseFloat(tcsPercent) || 0;
@@ -18,8 +20,14 @@ const calcTotals = ({ taxableAmount, gstType, gstPercent, tcsApplicable, tcsPerc
   const sgst = gstType === 'CGST_SGST' ? half : 0;
   const igst = gstType === 'IGST' ? gstAmt : 0;
 
-  // TCS base = taxableAmount only (CBDT Circular 17/2020 — excludes GST)
-  const tcsAmt = tcsApplicable ? parseFloat(((taxable * tcsPct) / 100).toFixed(2)) : 0;
+  // TCS: user-provided amount wins; otherwise auto-calc on taxableAmount only
+  const manualTcs = parseFloat(tcsAmount);
+  let tcsAmt = 0;
+  if (tcsApplicable) {
+    tcsAmt = !isNaN(manualTcs) && manualTcs >= 0
+      ? parseFloat(manualTcs.toFixed(2))
+      : parseFloat(((taxable * tcsPct) / 100).toFixed(2));
+  }
 
   // Final: taxable + GST + TCS + otherCharges
   const preRound = taxable + gstAmt + tcsAmt + others;
@@ -68,7 +76,7 @@ exports.createPurchase = async (req, res) => {
   const {
     billNumber, party, materialType, weight, weightUnit, ratePerKg,
     taxableAmount, gstType, gstPercent,
-    tcsApplicable, tcsPercent,
+    tcsApplicable, tcsPercent, tcsAmount,
     otherCharges, otherChargesLabel,
     billDate, dueDate, notes,
     lineItems: lineItemsRaw,
@@ -111,7 +119,11 @@ exports.createPurchase = async (req, res) => {
   if (lineItemsRaw) { try { lineItems = JSON.parse(lineItemsRaw); } catch { lineItems = []; } }
 
   const tcs = toBool(tcsApplicable);
-  const totals = calcTotals({ taxableAmount, gstType, gstPercent, tcsApplicable: tcs, tcsPercent, otherCharges });
+  const totals = calcTotals({
+    taxableAmount, gstType, gstPercent,
+    tcsApplicable: tcs, tcsPercent, tcsAmount,
+    otherCharges,
+  });
 
   const purchase = await Purchase.create({
     billNumber, party, materialType, weight, weightUnit, ratePerKg,
@@ -131,17 +143,26 @@ exports.updatePurchase = async (req, res) => {
   const purchase = await Purchase.findOne({ _id: req.params.id, createdBy: req.user._id });
   if (!purchase) return res.status(404).json({ success: false, message: 'Purchase not found.' });
 
-  const { billDate, lineItems: lineItemsRaw, tcsApplicable, taxableAmount, gstType, gstPercent, tcsPercent, otherCharges } = req.body;
+  const {
+    billDate, lineItems: lineItemsRaw, tcsApplicable, taxableAmount,
+    gstType, gstPercent, tcsPercent, tcsAmount, otherCharges,
+  } = req.body;
   if (billDate) req.body.financialYear = getFinancialYear(billDate);
   if (lineItemsRaw) { try { req.body.lineItems = JSON.parse(lineItemsRaw); } catch { delete req.body.lineItems; } }
 
   const tcs = tcsApplicable !== undefined ? toBool(tcsApplicable) : purchase.tcsApplicable;
+
+  // If the request sends no tcsAmount, keep the stored one (only when TCS was
+  // already applicable and had a value) so it isn't silently recalculated.
+  const storedTcs = purchase.tcsApplicable && purchase.tcsAmount ? purchase.tcsAmount : undefined;
+
   const totals = calcTotals({
     taxableAmount: taxableAmount !== undefined ? taxableAmount : purchase.taxableAmount,
     gstType: gstType !== undefined ? gstType : purchase.gstType,
     gstPercent: gstPercent !== undefined ? gstPercent : purchase.gstPercent,
     tcsApplicable: tcs,
     tcsPercent: tcsPercent !== undefined ? tcsPercent : purchase.tcsPercent,
+    tcsAmount: tcsAmount !== undefined ? tcsAmount : storedTcs,
     otherCharges: otherCharges !== undefined ? otherCharges : purchase.otherCharges,
   });
   Object.assign(req.body, totals, { tcsApplicable: tcs });
